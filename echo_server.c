@@ -15,7 +15,8 @@
 volatile sig_atomic_t shutdown_flag = 1;
 
 static void sigterm_handler(int signo){
-    printf("Got the signal!");
+
+    printf("Signal Number: %d", signo);
     shutdown_flag = 0;
 }
 
@@ -40,7 +41,7 @@ int main(void) {
     struct sigaction sa;
     sa.sa_handler = sigterm_handler;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART; // causes sig handler to not terminate.
+    //sa.sa_flags = SA_RESTART; // causes sig handler to not terminate.
     if(sigaction(SIGINT, &sa, NULL) == -1){
         fprintf(stderr, "sigaction\n");
         close(listener_fd);
