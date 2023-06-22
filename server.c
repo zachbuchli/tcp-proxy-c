@@ -9,208 +9,137 @@
 #include <errno.h>
 #include <string.h>
 #include <signal.h>
-#include <poll.h>
+#include <threads.h>
+#include <sys/epoll.h>
 
 #include "tcp_proxy.h"
-#include <threads.h>
 
-volatile sig_atomic_t shutdown_signal = 1;
+#define BACKLOG 10
+#define MAX_BUF_SIZE 256
+#define TARGET_IP "127.0.0.1"
+#define TARGET_PORT "3333"
+#define SERVER_IP "127.0.0.1"
+#define SERVER_PORT "4444"
+#define MAX_CONN 10
+#define MAX_EVENTS 10
+
+void handle_read_event(int conn_fd, connection *conns);
+
+typedef struct connection {
+    int client_fd;
+    int target_fd;
+} connection;
 
 int main(void) {
 
-    const int BACKLOG = 10;
-    const int MAX_BUF_SIZE = 100;
-    const char TARGET_ADDR[] = "127.0.0.1";
-    const char TARGET_PORT[] = "3333";
-    const char HOST_ADDR[] = "127.0.0.1";
-    const char PORT[] = "4444";
-    const size_t MAX_CONNECTIONS = 10;
-
     puts("server: staring tcp server....");
 
-    int fd_count = 0;
-    int fd_size = MAX_CONNECTIONS;
-    struct pollfd *pfds = malloc(sizeof(struct pollfd*) * fd_size);
 
-    int target_conn_fd = create_target_conn(TARGET_ADDR, TARGET_PORT);
-    if(target_conn_fd == -1){
-        fprintf(stderr, "server: %s\n", strerror(errno));
-        free(pfds);
-        pfds = NULL;
-        return EXIT_FAILURE;
-    }
-    printf("server: connected to target %s:%s\n", TARGET_ADDR, TARGET_PORT);
+    
+    printf("server: connected to target %s:%s\n", TARGET_IP, TARGET_PORT);
 
-    int listener_fd = create_listener(HOST_ADDR, PORT, BACKLOG);
+    int listener_fd = create_listener(SERVER_IP, SERVER_PORT, BACKLOG);
     if(listener_fd == -1){
         fprintf(stderr, "server: %s\n", strerror(errno));
-        free(pfds);
-        pfds = NULL;
         return EXIT_FAILURE;
     }
 
-    printf("%s %s:%s...\n", "server: listening on port: ", HOST_ADDR, PORT);
+    printf("server: listening on port: %s:%s\n", SERVER_IP, SERVER_PORT);
 
-    pfds[0].fd = listener_fd;
-    pfds[0].events = POLLIN;
-    ++fd_count;
 
-    pfds[1].fd = target_conn_fd;
-    pfds[1].events = POLLIN;
-    ++fd_count;
+    // get the epoll party started
+    struct epoll_event ev;
+    struct epoll_event events[MAX_EVENTS];
+
+    int epollfd = epoll_create1(0);
+    if(epollfd == -1) {
+        perror("epoll_create1");
+        return EXIT_FAILURE;
+    }
+
+    //ev.events = EPOLLIN | EPOLLEXCLUSIVE;
+    ev.events = EPOLLIN;
+    ev.data.fd = listener_fd;
+    
+    if(epoll_ctl(epollfd, EPOLL_CTL_ADD, listener_fd, &ev) == -1) {
+        perror("epoll_ctl");
+        return EXIT_FAILURE;
+    }
+
+    int client_fd;
+    int target_fd;
+    struct sockaddr_storage client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+
+    connection conns[MAX_CONN];
+    int conn_count = 0;
 
     for(;;) {
-        int poll_count = poll(pfds, fd_count, -1);
-        if(poll_count == -1){
-            perror("poll");
+
+        int nfds = epoll_wait(epollfd, events, MAX_EVENTS, -1);
+        if(nfds == -1) {
+            perror("epoll_wait");
+            return EXIT_FAILURE;
         }
-
-        for(int i = 0; i < fd_count; i++){
-
-            if(pfds[i].revents & POLLIN) { // ready to read
-                if(pfds[i].fd == listener_fd) { // new connection
-
-                    socklen_t addr_size;
-                    struct sockaddr_storage their_addr;
-                    addr_size = sizeof(their_addr);
-                    int new_fd;
-
-                    new_fd = accept(listener_fd, (struct sockaddr *)&their_addr, &addr_size);
-                    if( new_fd == -1) {
-                        fprintf(stderr, "server: %s\n", strerror(errno));
-
-                    }
-
-                    add_to_pfds(&pfds, new_fd, &fd_count, &fd_size);
-
-                    // Get name of connected client
-                    char conn_addr_res[INET_ADDRSTRLEN];
-                    void *conn_addr = &((((struct sockaddr_in *)&their_addr)->sin_addr)); // gross
-                    inet_ntop(their_addr.ss_family, conn_addr, conn_addr_res, sizeof(conn_addr_res));
-                    printf("server: connection from: %s on socket: %d\n", conn_addr_res, new_fd);
-
-                } else { // client already connected
-
-                    char buffer[MAX_BUF_SIZE];
-                    int bytes_read = recv(pfds[i].fd, buffer, sizeof(buffer), 0);
-                    if (bytes_read == -1){
-                        fprintf(stderr, "server: %s\n", strerror(errno));
-                    }
-
-                    if(bytes_read <= 0){
-                        if(bytes_read == 0){
-                            printf("server: client closed connection.\n");
-                        } else {
-                            perror("recv");
-                        }
-                        close(pfds[i].fd);
-                        del_from_pfds(pfds, i, &fd_count);
-                        continue; // do I want to do this?
-                    }
-
-                    printf("server: received %d of %d bytes\n", bytes_read, MAX_BUF_SIZE);
-
-
-
-
-
-
-
+        // loop throw events
+        for(int n = 0; n < nfds; ++n) {
+            if(events[n].data.fd == listener_fd){
+                // handle new connection
+                client_fd = accept(listener_fd, (struct sockaddr *)&client_addr, &addr_len);
+                if (client_fd == -1) {
+                    perror("accept");
+                    return EXIT_FAILURE;
                 }
+
+               // add client to epoll 
+                ev.events = EPOLLIN;
+                ev.data.fd = client_fd;
+                if (epoll_ctl(epollfd, EPOLL_CTL_ADD, client_fd, &ev) == -1) {
+                    perror("epoll_ctl");
+                    return EXIT_FAILURE;
+                }
+
+                // add target to epoll
+                int target_conn_fd = create_target_conn(TARGET_IP, TARGET_PORT);
+                if(target_conn_fd == -1){
+                    fprintf(stderr, "server: %s\n", strerror(errno));
+                    return EXIT_FAILURE;
+                }
+                // add target to epoll 
+                ev.events = EPOLLIN;
+                ev.data.fd = target_fd;
+                if (epoll_ctl(epollfd, EPOLL_CTL_ADD, client_fd, &ev) == -1) {
+                    perror("epoll_ctl");
+                    return EXIT_FAILURE;
+                }
+
+                // save target and client pair to data structure
+                connection conn;
+                conn.client_fd = client_fd;
+                conn.target_fd = target_fd;
+                conns[conn_count] = conn;
+                conn_count++;
+            } else {
+                // need to read and write 
+                // potential solution:
+                // if client_fd, forward to target
+                // if target_fd, lookup client_fd
+                
+                handle_read_event(events[n].data.fd, conns);
             }
         }
-    }
-
-    socklen_t addr_size;
-    struct sockaddr_storage their_addr;
-    addr_size = sizeof(their_addr);
-    int new_fd;
-
-    new_fd = accept(listener_fd, (struct sockaddr *)&their_addr, &addr_size);
-    if( new_fd == -1) {
-        fprintf(stderr, "server: %s\n", strerror(errno));
-        return EXIT_FAILURE;
-    }
-
-    // Get name of connected client
-    char conn_addr_res[INET_ADDRSTRLEN];
-    void *conn_addr = &((((struct sockaddr_in *)&their_addr)->sin_addr)); // gross
-    inet_ntop(their_addr.ss_family, conn_addr, conn_addr_res, sizeof(conn_addr_res));
-    printf("server: connection from: %s...\n", conn_addr_res);
 
 
-    // place main server loop here.
-    while(shutdown_signal == 1){
-
-        // wait for input from client
-        char buffer[MAX_BUF_SIZE];
-        int bytes_read = recv(new_fd, buffer, sizeof(buffer) - 1, 0);
-        if (bytes_read == -1){
-            fprintf(stderr, "server: %s\n", strerror(errno));
-            close(listener_fd);
-            close(new_fd);
-            return EXIT_FAILURE;
-        }
-
-        if(bytes_read == 0){
-            printf("server: client closed connection.\n");
-            close(listener_fd);
-            close(new_fd);
-            return EXIT_SUCCESS;
-        }
-
-        buffer[bytes_read] = '\0'; // ensure end of array character
-        printf("server: received %d of %d bytes\n", bytes_read, MAX_BUF_SIZE);
-
-        // forward message to target
-        int bytes_sent_target;
-        bytes_sent_target = send(target_conn_fd, buffer, bytes_read, 0);
-        printf("server: sent %d / %d bytes to connection at %s\n", bytes_sent_target, bytes_read, conn_addr_res);
-
-        if(bytes_sent_target == -1){
-            fprintf(stderr, "%s\n", strerror(errno));
-            close(listener_fd);
-            close(new_fd);
-            close(target_conn_fd);
-            return EXIT_FAILURE;
-        }
-
-        // wait for response from target
-        char buffer_target[MAX_BUF_SIZE];
-        int bytes_read_target = recv(target_conn_fd, buffer_target, sizeof(buffer) - 1, 0);
-        if (bytes_read_target == -1){
-            fprintf(stderr, "server: %s\n", strerror(errno));
-            close(listener_fd);
-            close(new_fd);
-            close(target_conn_fd);
-            return EXIT_FAILURE;
-        }
-
-        if(bytes_read_target == 0){
-            printf("server: client closed connection.\n");
-            close(listener_fd);
-            close(new_fd);
-            return EXIT_SUCCESS;
-        }
-
-        // send target response back to client
-        int bytes_sent_client;
-        bytes_sent_client = send(new_fd, buffer_target, bytes_read_target, 0);
-        printf("server: sent %d / %d bytes to connection at %s\n", bytes_sent_client, bytes_read_target, conn_addr_res);
-
-        if(bytes_sent_client == -1){
-            fprintf(stderr, "%s\n", strerror(errno));
-            close(listener_fd);
-            close(new_fd);
-            close(target_conn_fd);
-            return EXIT_FAILURE;
-        }
     }
 
 
     puts("server: shutting down....");
     close(listener_fd);
-    close(new_fd);
-    close(target_conn_fd);
     return EXIT_SUCCESS;
+}
+
+void handle_read_event(int conn_fd, connection *conns) {
+
+
+
 }
