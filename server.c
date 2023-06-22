@@ -23,12 +23,14 @@
 #define MAX_CONN 10
 #define MAX_EVENTS 10
 
-void handle_read_event(int conn_fd, connection *conns);
+
 
 typedef struct connection {
     int client_fd;
     int target_fd;
 } connection;
+
+void handle_read_event(int conn_fd, connection *conns, int conn_count);
 
 int main(void) {
 
@@ -74,7 +76,7 @@ int main(void) {
     connection conns[MAX_CONN];
     int conn_count = 0;
 
-    for(;;) {
+    for(;;) { // main event loop
 
         int nfds = epoll_wait(epollfd, events, MAX_EVENTS, -1);
         if(nfds == -1) {
@@ -100,8 +102,8 @@ int main(void) {
                 }
 
                 // add target to epoll
-                int target_conn_fd = create_target_conn(TARGET_IP, TARGET_PORT);
-                if(target_conn_fd == -1){
+                target_fd = create_target_conn(TARGET_IP, TARGET_PORT);
+                if(target_fd == -1){
                     fprintf(stderr, "server: %s\n", strerror(errno));
                     return EXIT_FAILURE;
                 }
@@ -125,21 +127,55 @@ int main(void) {
                 // if client_fd, forward to target
                 // if target_fd, lookup client_fd
                 
-                handle_read_event(events[n].data.fd, conns);
+                handle_read_event(events[n].data.fd, conns, conn_count);
             }
         }
-
-
     }
-
-
-    puts("server: shutting down....");
-    close(listener_fd);
-    return EXIT_SUCCESS;
 }
 
-void handle_read_event(int conn_fd, connection *conns) {
+void handle_read_event(int conn_fd, connection *conns, int conn_count) {
 
+    int send_fd = -1;
+    // find connection pair. really should be hash map. or maybe use the void ptr on the event struct
+    for(int i = 0; i < conn_count; ++i){
+        if(conns[i].client_fd == conn_fd){
+            send_fd = conns[i].target_fd;
+        } 
+        else if (conns[i].target_fd == conn_fd) {
+            send_fd = conns[i].client_fd;
+        }
+    }
 
+    if(send_fd == -1){
+        close(conn_fd);
+        fprintf(stderr, "could not find connection pair.\n");
+        return; // exit for now
+    }
+    
 
+    char buffer[MAX_BUF_SIZE];
+    int bytes_read = recv(conn_fd, buffer, sizeof(buffer), 0);
+    if(bytes_read == -1){
+        perror("recv");
+        close(conn_fd);
+        close(send_fd);
+        // remove from list
+        return;
+    }
+    else if (bytes_read == 0){
+        // conn closed
+        // this also might be a bug. Do we send null character on to send_fd? 
+        close(conn_fd);
+        close(send_fd);
+        // remove from list
+        return;
+    }
+
+    int bytes_sent = send(send_fd, buffer, bytes_read, 0);
+    if(bytes_sent == -1) {
+        perror("send");
+        close(conn_fd);
+        close(send_fd);
+        // remove from list
+    }
 }
