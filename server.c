@@ -17,9 +17,9 @@
 #define BACKLOG 10
 #define MAX_BUF_SIZE 256
 #define TARGET_IP "127.0.0.1"
-#define TARGET_PORT "3333"
+#define TARGET_PORT "8080"
 #define SERVER_IP "127.0.0.1"
-#define SERVER_PORT "4444"
+#define SERVER_PORT "9000"
 #define MAX_CONN 10
 #define MAX_EVENTS 10
 
@@ -35,10 +35,6 @@ void handle_read_event(int conn_fd, connection *conns, int conn_count);
 int main(void) {
 
     puts("server: staring tcp server....");
-
-
-    
-    printf("server: connected to target %s:%s\n", TARGET_IP, TARGET_PORT);
 
     int listener_fd = create_listener(SERVER_IP, SERVER_PORT, BACKLOG);
     if(listener_fd == -1){
@@ -86,6 +82,7 @@ int main(void) {
         // loop throw events
         for(int n = 0; n < nfds; ++n) {
             if(events[n].data.fd == listener_fd){
+
                 // handle new connection
                 client_fd = accept(listener_fd, (struct sockaddr *)&client_addr, &addr_len);
                 if (client_fd == -1) {
@@ -110,7 +107,7 @@ int main(void) {
                 // add target to epoll 
                 ev.events = EPOLLIN;
                 ev.data.fd = target_fd;
-                if (epoll_ctl(epollfd, EPOLL_CTL_ADD, client_fd, &ev) == -1) {
+                if (epoll_ctl(epollfd, EPOLL_CTL_ADD, target_fd, &ev) == -1) {
                     perror("epoll_ctl");
                     return EXIT_FAILURE;
                 }
@@ -121,6 +118,8 @@ int main(void) {
                 conn.target_fd = target_fd;
                 conns[conn_count] = conn;
                 conn_count++;
+
+                puts("server: new connection established....");
             } else {
                 // need to read and write 
                 // potential solution:
@@ -168,8 +167,11 @@ void handle_read_event(int conn_fd, connection *conns, int conn_count) {
         close(conn_fd);
         close(send_fd);
         // remove from list
+        puts("server: client closed connection");
         return;
     }
+
+    printf("server: received %d / %ld bytes.\n", bytes_read, sizeof(buffer));
 
     int bytes_sent = send(send_fd, buffer, bytes_read, 0);
     if(bytes_sent == -1) {
@@ -178,4 +180,6 @@ void handle_read_event(int conn_fd, connection *conns, int conn_count) {
         close(send_fd);
         // remove from list
     }
+
+    printf("server: sent %d / %d bytes.\n", bytes_sent, bytes_read);
 }
