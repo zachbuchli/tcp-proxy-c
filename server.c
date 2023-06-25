@@ -11,6 +11,7 @@
 #include <signal.h>
 #include <threads.h>
 #include <sys/epoll.h>
+#include <stdbool.h>
 
 #include "tcp_proxy.h"
 
@@ -20,17 +21,15 @@
 #define TARGET_PORT "8080"
 #define SERVER_IP "127.0.0.1"
 #define SERVER_PORT "9000"
-#define MAX_CONN 10
+#define MAX_CONN 2
 #define MAX_EVENTS 10
 
-
-
-typedef struct connection {
-    int client_fd;
-    int target_fd;
-} connection;
-
-void handle_read_event(int conn_fd, connection *conns, int conn_count);
+// todo: add thread pool
+// todo: create useable datastructure for connection context
+// todo: load balencing feature? 
+// todo: logging 
+// todo: write test software 
+// todo: graceful shutdown
 
 int main(void) {
 
@@ -44,7 +43,6 @@ int main(void) {
 
     printf("server: listening on port: %s:%s\n", SERVER_IP, SERVER_PORT);
 
-
     // get the epoll party started
     struct epoll_event ev;
     struct epoll_event events[MAX_EVENTS];
@@ -55,7 +53,7 @@ int main(void) {
         return EXIT_FAILURE;
     }
 
-    //ev.events = EPOLLIN | EPOLLEXCLUSIVE;
+    //ev.events = EPOLLIN | EPOLLEXCLUSIVE; // use to avoid issues mulitthreading
     ev.events = EPOLLIN;
     ev.data.fd = listener_fd;
     
@@ -79,7 +77,8 @@ int main(void) {
             perror("epoll_wait");
             return EXIT_FAILURE;
         }
-        // loop throw events
+
+        // loop through events
         for(int n = 0; n < nfds; ++n) {
             if(events[n].data.fd == listener_fd){
 
@@ -88,6 +87,12 @@ int main(void) {
                 if (client_fd == -1) {
                     perror("accept");
                     return EXIT_FAILURE;
+                }
+
+                if(conn_count == MAX_CONN) {
+                    printf("Max connection limit of %d has been reached\n", MAX_CONN);
+                    close(client_fd);
+                    break;
                 }
 
                // add client to epoll 
@@ -119,67 +124,11 @@ int main(void) {
                 conns[conn_count] = conn;
                 conn_count++;
 
-                puts("server: new connection established....");
+                printf("server: new connection established between client %d, and target %d\n", client_fd, target_fd);
             } else {
-                // need to read and write 
-                // potential solution:
-                // if client_fd, forward to target
-                // if target_fd, lookup client_fd
                 
-                handle_read_event(events[n].data.fd, conns, conn_count);
+                handle_read_event(events[n].data.fd, conns, &conn_count, epollfd, MAX_BUF_SIZE);
             }
         }
     }
-}
-
-void handle_read_event(int conn_fd, connection *conns, int conn_count) {
-
-    int send_fd = -1;
-    // find connection pair. really should be hash map. or maybe use the void ptr on the event struct
-    for(int i = 0; i < conn_count; ++i){
-        if(conns[i].client_fd == conn_fd){
-            send_fd = conns[i].target_fd;
-        } 
-        else if (conns[i].target_fd == conn_fd) {
-            send_fd = conns[i].client_fd;
-        }
-    }
-
-    if(send_fd == -1){
-        close(conn_fd);
-        fprintf(stderr, "could not find connection pair.\n");
-        return; // exit for now
-    }
-    
-
-    char buffer[MAX_BUF_SIZE];
-    int bytes_read = recv(conn_fd, buffer, sizeof(buffer), 0);
-    if(bytes_read == -1){
-        perror("recv");
-        close(conn_fd);
-        close(send_fd);
-        // remove from list
-        return;
-    }
-    else if (bytes_read == 0){
-        // conn closed
-        // this also might be a bug. Do we send null character on to send_fd? 
-        close(conn_fd);
-        close(send_fd);
-        // remove from list
-        puts("server: client closed connection");
-        return;
-    }
-
-    printf("server: received %d / %ld bytes.\n", bytes_read, sizeof(buffer));
-
-    int bytes_sent = send(send_fd, buffer, bytes_read, 0);
-    if(bytes_sent == -1) {
-        perror("send");
-        close(conn_fd);
-        close(send_fd);
-        // remove from list
-    }
-
-    printf("server: sent %d / %d bytes.\n", bytes_sent, bytes_read);
 }

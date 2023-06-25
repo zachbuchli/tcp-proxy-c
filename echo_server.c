@@ -22,7 +22,7 @@
 #define MAX_EVENTS 10
 
 
-void handle_read_event(int conn_fd);
+void handle_read_event_echo(int conn_fd);
 
 int main(void) {
 
@@ -89,13 +89,13 @@ int main(void) {
                 puts("echo server: new connection established");
             } else {
                 // fd has something to read!
-                handle_read_event(events[n].data.fd);
+                handle_read_event_echo(events[n].data.fd);
             }
         }
     }
 }
 
-void handle_read_event(int conn_fd) {
+void handle_read_event_echo(int conn_fd) {
 
     
     char buffer[MAX_BUF_SIZE];
@@ -115,11 +115,15 @@ void handle_read_event(int conn_fd) {
 
     printf("echo server: received %d / %ld bytes\n", bytes_read, sizeof(buffer));
 
-    int bytes_sent = send(conn_fd, buffer, bytes_read, 0);
-    if(bytes_sent == -1) {
-        perror("send");
+    int bytes_sent = sendall(conn_fd, buffer, bytes_read);
+    if(bytes_sent == -1){
+        perror("sendall");
         close(conn_fd);
+        return;
     }
-
+    
+    
     printf("echo server: sent %d / %d bytes\n", bytes_sent, bytes_read);
 }
+
+ 
