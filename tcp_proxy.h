@@ -46,7 +46,7 @@ extern int create_target_conn(const char *ip_addr, const char *port);
  * @return
  * snagged this one from https://beej.us/guide/bgnet/html/split/slightly-advanced-techniques.html
  */
-extern void *get_in_addr(struct sockaddr *sa);
+extern void* get_in_addr(struct sockaddr *sa);
 
 
 /**
