@@ -9,7 +9,7 @@
 #include <errno.h>
 #include <string.h>
 #include <signal.h>
-#include <threads.h>
+#include <pthread.h>
 #include <sys/epoll.h>
 
 #include "tcp_proxy.h"
@@ -23,6 +23,8 @@
 
 
 void handle_read_event_echo(int conn_fd);
+
+static pthread_t thread_id;
 
 int main(void) {
 

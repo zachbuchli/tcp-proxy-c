@@ -3,3 +3,6 @@ cmake-build-debug
 build
 .vscode
 .cache
+.vs
+out
+
