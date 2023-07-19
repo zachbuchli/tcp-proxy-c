@@ -12,8 +12,14 @@ endif()
 add_executable(server server.c tcp_proxy.c)
 add_executable(client client.c)
 add_executable(showip showip.c)
-add_executable(echo_server echo_server.c tcp_proxy.c)	
+add_executable(echo_server echo_server.c tcp_proxy.c)
+
+# Create libraries
+
+add_library(logger STATIC logger.c)
 
 # link libs
 
 target_link_libraries(echo_server pthread)
+target_link_libraries(echo_server logger)
+target_link_libraries(server pthread)

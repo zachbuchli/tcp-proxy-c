@@ -9,9 +9,9 @@
 #include <errno.h>
 #include <string.h>
 #include <signal.h>
-#include <threads.h>
 #include <sys/epoll.h>
 #include <stdbool.h>
+#include <pthread.h>
 
 #include "tcp_proxy.h"
 

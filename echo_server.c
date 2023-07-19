@@ -13,6 +13,7 @@
 #include <sys/epoll.h>
 
 #include "tcp_proxy.h"
+#include "logger.h"
 
 #define BACKLOG 10
 #define MAX_BUF_SIZE 256
@@ -24,11 +25,17 @@
 
 void handle_read_event_echo(int conn_fd);
 
-static pthread_t thread_id;
 
 int main(void) {
 
-    puts("echo server: staring tcp server....");
+    if (setup_logger() != 0) {
+        fputs("Error setting up logger", stderr);
+        return EXIT_FAILURE;
+    }
+
+    set_log_level(TRACE);
+
+    log_message( INFO, "echo server: staring tcp server....");
 
     int listener_fd = create_listener(SERVER_IP, SERVER_PORT, BACKLOG);
     if(listener_fd == -1){
@@ -36,7 +43,11 @@ int main(void) {
         return EXIT_FAILURE;
     }
 
-    printf("echo server: listening on port: %s:%s\n", SERVER_IP, SERVER_PORT);
+    char log_msg[MAX_MESSAGE_SIZE];
+    sprintf(log_msg, "echo server: listening on port: %s:%s", SERVER_IP, SERVER_PORT);
+    log_message(INFO, log_msg);
+    memset(log_msg, 0, sizeof(log_msg));
+
 
 
     // get the epoll party started
@@ -95,6 +106,8 @@ int main(void) {
             }
         }
     }
+
+    destroy_logger();
 }
 
 void handle_read_event_echo(int conn_fd) {
